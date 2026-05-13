@@ -285,9 +285,14 @@ function startRecognition() {
     el.className = "tb-text";
     el.textContent = text;
 
-    // Debounce translation
-    if (translateTimeout) clearTimeout(translateTimeout);
-    translateTimeout = setTimeout(() => translateAndSend(final.trim() || text), 600);
+    // Translate final results immediately, interim with short delay
+    if (final.trim()) {
+      if (translateTimeout) clearTimeout(translateTimeout);
+      translateAndSend(final.trim());
+    } else {
+      if (translateTimeout) clearTimeout(translateTimeout);
+      translateTimeout = setTimeout(() => translateAndSend(text), 200);
+    }
   };
 
   recognition.onerror = (e) => {
