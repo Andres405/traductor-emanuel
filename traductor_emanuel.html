@@ -113,6 +113,9 @@ body:before{
 .send-btn{border:0;border-radius:16px;background:linear-gradient(135deg,var(--gold),var(--gold2));color:#07101f;font-weight:900;padding:0 16px;cursor:pointer}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.9);padding:12px 20px;border-radius:999px;font-size:13px;font-weight:900;z-index:9999;opacity:0;transition:.25s}
 .toast.show{opacity:1}
+
+.auto-audio-off{background:rgba(255,255,255,.10)!important;color:rgba(255,255,255,.75)!important;border:1px solid rgba(255,255,255,.18)!important}
+.auto-audio-on{background:linear-gradient(135deg,#22c55e,#86efac)!important;color:#07101f!important}
 @media(max-width:700px){
   .grid2,.caption-row{grid-template-columns:1fr}
   .box{min-height:130px}
@@ -223,6 +226,7 @@ body:before{
       </div>
 
       <button id="ttsBtn" class="tts" onclick="speakNow()" disabled>🔊 Leer traducción / Read aloud</button>
+      <button id="autoAudioBtn" class="tts auto-audio-off" onclick="toggleAutoAudio()">🎧 Activar audio automático / Enable auto audio</button>
     </div>
   </div>
 </section>
@@ -253,6 +257,8 @@ let lastSentText = "";
 let lastTranslated = "";
 let lastTs = 0;
 let lastSpeak = "";
+let autoAudio = false;
+let lastAutoSpoken = "";
 
 // ====================== SCREENS ======================
 function showScreen(name){
@@ -433,18 +439,55 @@ function startListener(){
 
     lastTranslated = textToShow;
     ttsBtn.disabled = !textToShow;
+
+    if(autoAudio && textToShow && textToShow !== lastAutoSpoken && !data.partial){
+      lastAutoSpoken = textToShow;
+      speakText(textToShow);
+    }
   });
 }
 
 // ====================== TTS ======================
-function speakNow(){
-  const text = listenerTranslated.textContent.trim();
+function speakText(text){
   if(!text || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(text);
   utt.lang = listenerLang === "es" ? "es-ES" : "en-US";
-  utt.rate = .9;
+  utt.rate = .92;
+  utt.pitch = 1;
+  utt.volume = 1;
   window.speechSynthesis.speak(utt);
+}
+
+function speakNow(){
+  const text = listenerTranslated.textContent.trim();
+  speakText(text);
+}
+
+function toggleAutoAudio(){
+  autoAudio = !autoAudio;
+  const btn = document.getElementById("autoAudioBtn");
+  btn.classList.toggle("auto-audio-on", autoAudio);
+  btn.classList.toggle("auto-audio-off", !autoAudio);
+  btn.textContent = autoAudio
+    ? "🎧 Audio automático activado / Auto audio enabled"
+    : "🎧 Activar audio automático / Enable auto audio";
+
+  if(autoAudio){
+    const text = listenerTranslated.textContent.trim();
+    if(text && text !== "La traducción aparecerá aquí." && text !== "Waiting for translation..."){
+      lastAutoSpoken = text;
+      speakText(text);
+    }else{
+      // Unlock speech engine with a very short phrase after user tap.
+      const unlock = new SpeechSynthesisUtterance(listenerLang === "es" ? "Audio activado" : "Audio enabled");
+      unlock.lang = listenerLang === "es" ? "es-ES" : "en-US";
+      unlock.volume = .8;
+      window.speechSynthesis.speak(unlock);
+    }
+  }else{
+    window.speechSynthesis.cancel();
+  }
 }
 
 // ====================== UTILS ======================
@@ -463,6 +506,7 @@ window.setListenerLang=setListenerLang;
 window.toggleMic=toggleMic;
 window.manualSend=manualSend;
 window.speakNow=speakNow;
+window.toggleAutoAudio=toggleAutoAudio;
 </script>
 </body>
 </html>
