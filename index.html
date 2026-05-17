@@ -356,9 +356,7 @@ function startRecognition(){
     });
 
     if(final.trim()){
-      // Acumular frases finales en el buffer de contexto
       finalBuffer += final.trim() + " ";
-      // Mantener solo las últimas ~200 caracteres como contexto
       if(finalBuffer.length > 200){
         finalBuffer = finalBuffer.slice(-200);
         const firstSpace = finalBuffer.indexOf(" ");
@@ -367,8 +365,7 @@ function startRecognition(){
       // Solo traducir frases finales — ahorra llamadas a la API
       scheduleTranslation(finalBuffer.trim(), 0);
     }
-    // Frases parciales (interim): NO se traducen, solo se muestran como subtítulo original
-    // Esto reduce el uso de la API al mínimo necesario
+    // Interim: NO se traducen, solo se muestran como subtítulo
   };
 
   recognition.onerror = (e)=>{
@@ -421,55 +418,19 @@ async function translateWithMyMemory(text, from, to) {
   return t;
 }
 
-async function translateWithLibreTranslate(text, from, to) {
-  // Instancias públicas de LibreTranslate — sin límite, sin API key
-  const endpoints = [
-    "https://libretranslate.de/translate",
-    "https://translate.argosopentech.com/translate",
-    "https://libretranslate.com/translate"
-  ];
-  for (const url of endpoints) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q: text, source: from, target: to, format: "text" }),
-        signal: AbortSignal.timeout(5000)
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.translatedText) return data.translatedText;
-    } catch(e) { continue; }
-  }
-  throw new Error("LibreTranslate no disponible");
+async function translateWithGoogle(text, from, to) {
+  // Google Translate sin API key — sin límite para uso normal
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+  if (!res.ok) throw new Error("Google error " + res.status);
+  const data = await res.json();
+  const translated = data?.[0]?.map(chunk => chunk?.[0] || "").join("").trim();
+  if (!translated) throw new Error("Sin respuesta de Google");
+  return translated;
 }
 
-// Cache simple para no re-traducir frases ya traducidas
+// Cache para no re-traducir frases repetidas
 const _translateCache = new Map();
-
-async function translate(text, from, to) {
-  const key = `${from}|${to}|${text}`;
-  if (_translateCache.has(key)) return _translateCache.get(key);
-
-  let result = "";
-  // Cascada: Netlify proxy → MyMemory → LibreTranslate
-  try { result = await translateWithProxy(text, from, to); }
-  catch(e) {
-    try { result = await translateWithMyMemory(text, from, to); }
-    catch(e2) {
-      try { result = await translateWithLibreTranslate(text, from, to); }
-      catch(e3) { throw new Error("Todos los servicios fallaron"); }
-    }
-  }
-
-  // Guardar en cache (máximo 80 entradas)
-  if (_translateCache.size > 80) {
-    const firstKey = _translateCache.keys().next().value;
-    _translateCache.delete(firstKey);
-  }
-  _translateCache.set(key, result);
-  return result;
-}
 
 async function translateAndSend(text){
   if(!text || text === lastSentText) return;
@@ -477,26 +438,47 @@ async function translateAndSend(text){
   const from = speakerLang.startsWith("es") ? "es" : "en";
   const to = targetLang;
 
+  // Revisar cache primero
+  const cacheKey = `${from}|${to}|${text}`;
+  if (_translateCache.has(cacheKey)) {
+    const cached = _translateCache.get(cacheKey);
+    lastTranslated = cached;
+    speakerTranslated.className = "text gold";
+    speakerTranslated.textContent = cached;
+    sendLive({ original:text, translated:cached, fromLang:from, toLang:to, partial:false, status:"translated" });
+    return;
+  }
+
   speakerTranslated.className = "text gold";
   speakerTranslated.textContent = "Traduciendo...";
 
   let translated = "";
 
   try {
-    translated = await translate(text, from, to);
+    translated = await translateWithProxy(text, from, to);
   } catch(e) {
-    console.warn("Todos los servicios de traducción fallaron:", e.message);
+    try {
+      translated = await translateWithMyMemory(text, from, to);
+    } catch(e2) {
+      try {
+        translated = await translateWithGoogle(text, from, to);
+      } catch(e3) {
+        console.warn("Todos los servicios fallaron:", e3.message);
+      }
+    }
   }
 
   if(translated){
+    // Guardar en cache (máximo 80 entradas)
+    if (_translateCache.size >= 80) _translateCache.delete(_translateCache.keys().next().value);
+    _translateCache.set(cacheKey, translated);
     lastTranslated = translated;
     speakerTranslated.className = "text gold";
     speakerTranslated.textContent = translated;
     sendLive({ original:text, translated, fromLang:from, toLang:to, partial:false, status:"translated" });
   } else {
-    // Nunca mostrar errores al oyente — mostrar el original
     lastSentText = "";
-    speakerTranslated.textContent = "⚠️ Sin traducción ahora";
+    speakerTranslated.textContent = "⚠️ Sin traducción — verificar conexión";
     sendLive({ original:text, translated:text, fromLang:from, toLang:to, partial:false, status:"original" });
   }
 }
