@@ -295,6 +295,19 @@ function startRecognition(){
     micBtn.textContent = "⏹️";
     speakerDot.classList.add("live");
     speakerStatus.textContent = "🔴 Escuchando en vivo. Habla claro y cerca del micrófono.";
+
+    // Limpiar Firebase para que los oyentes vean pantalla limpia
+    lastSentText = "";
+    lastTranslated = "";
+    liveRef.set({
+      original: "",
+      translated: "",
+      fromLang: speakerLang.startsWith("es") ? "es" : "en",
+      toLang: targetLang,
+      partial: false,
+      status: "starting",
+      ts: Date.now()
+    });
   };
 
   recognition.onresult = (event)=>{
@@ -360,31 +373,8 @@ function scheduleTranslation(text, delay){
   translateTimer = setTimeout(()=>translateAndSend(text), delay);
 }
 
-// ====================== TRADUCCIÓN ======================
-async function translateWithProxy(text, from, to) {
-  // Llama a la Netlify Function que hace de proxy hacia DeepL
-  const res = await fetch("/.netlify/functions/translate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, from, to })
-  });
-  if (!res.ok) throw new Error("Proxy error " + res.status);
-  const data = await res.json();
-  if (!data.translated) throw new Error("Sin traducción");
-  return data.translated;
-}
-
-async function translateWithMyMemory(text, from, to) {
-  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}&de=traductor@ibeoklahoma.org`;
-  const res = await fetch(url);
-  const data = await res.json();
-  const t = data.responseData?.translatedText || "";
-  if (!t || t.toUpperCase().includes("MYMEMORY WARNING")) throw new Error("MyMemory limit");
-  return t;
-}
-
-async function translateAndSend(text) {
-  if (!text || text === lastSentText) return;
+async function translateAndSend(text){
+  if(!text || text === lastSentText) return;
   lastSentText = text;
   const from = speakerLang.startsWith("es") ? "es" : "en";
   const to = targetLang;
@@ -392,28 +382,20 @@ async function translateAndSend(text) {
   speakerTranslated.className = "text gold";
   speakerTranslated.textContent = "Traduciendo...";
 
-  let translated = "";
+  try{
+    const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=" + from + "|" + to;
+    const res = await fetch(url);
+    const data = await res.json();
+    const translated = data.responseData && data.responseData.translatedText ? data.responseData.translatedText : "";
 
-  // Intentar DeepL (via proxy), si falla usar MyMemory como respaldo
-  try {
-    translated = await translateWithProxy(text, from, to);
-  } catch(e) {
-    console.warn("DeepL proxy falló, usando MyMemory:", e.message);
-    try {
-      translated = await translateWithMyMemory(text, from, to);
-    } catch(e2) {
-      toast("Sin traducción disponible. Revisa internet.");
-      speakerTranslated.textContent = text;
-      lastSentText = "";
-      return;
+    if(translated){
+      lastTranslated = translated;
+      speakerTranslated.className = "text gold";
+      speakerTranslated.textContent = translated;
+      sendLive({ original:text, translated, fromLang:from, toLang:to, partial:false, status:"translated" });
     }
-  }
-
-  if (translated) {
-    lastTranslated = translated;
-    speakerTranslated.className = "text gold";
-    speakerTranslated.textContent = translated;
-    sendLive({ original: text, translated, fromLang: from, toLang: to, partial: false, status: "translated" });
+  }catch(e){
+    toast("Error de traducción. Revisa internet.");
   }
 }
 
@@ -453,6 +435,15 @@ function startListener(){
     listenerStatus.textContent = listenerLang === "es" ? "🔴 En vivo" : "🔴 Live";
 
     listenerOriginal.textContent = data.original || "–";
+
+    // Si el pastor acaba de iniciar, mostrar pantalla limpia
+    if (data.status === "starting") {
+      listenerTranslated.textContent = listenerLang === "es" ? "El pastor está comenzando..." : "Speaker is starting...";
+      listenerMeta.textContent = listenerLang === "es" ? "Iniciando transmisión..." : "Starting broadcast...";
+      listenerDot.classList.add("live");
+      listenerStatus.textContent = listenerLang === "es" ? "🔴 En vivo" : "🔴 Live";
+      return;
+    }
 
     let textToShow = "";
     if(listenerLang === data.fromLang){
