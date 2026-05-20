@@ -413,8 +413,13 @@ async function translateWithMyMemory(text, from, to) {
   const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}&de=traductor@ibeoklahoma.org`;
   const res = await fetch(url);
   const data = await res.json();
-  const t = data.responseData?.translatedText || "";
-  if (!t || t.toUpperCase().includes("MYMEMORY WARNING")) throw new Error("MyMemory limit");
+  const t = data?.responseData?.translatedText || data?.matches?.[0]?.translation || "";
+  const bad = t.toLowerCase();
+  if (!res.ok || !t || bad.includes("mymemory warning") || bad.includes("daily limit") ||
+      bad.includes("quota") || bad.includes("translated so much") || bad.includes("no more translations") ||
+      bad.includes("you used all available")) {
+    throw new Error("MyMemory limit detected");
+  }
   return t;
 }
 
