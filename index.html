@@ -356,14 +356,11 @@ function startRecognition(){
     });
 
     if(final.trim()){
-      finalBuffer += final.trim() + " ";
-      if(finalBuffer.length > 200){
-        finalBuffer = finalBuffer.slice(-200);
-        const firstSpace = finalBuffer.indexOf(" ");
-        if(firstSpace > 0) finalBuffer = finalBuffer.slice(firstSpace + 1);
-      }
-      // Solo traducir frases finales — ahorra llamadas a la API
-      scheduleTranslation(finalBuffer.trim(), 0);
+      const phrase = final.trim();
+
+      // Traducir SOLO la frase nueva, no todo el historial.
+      // Esto evita que Google repita varias veces lo que ya se había traducido.
+      scheduleTranslation(phrase, 0);
     }
     // Interim: NO se traducen, solo se muestran como subtítulo
   };
@@ -409,14 +406,9 @@ function isBadTranslation(text) {
     t.includes("you used all available") ||
     t.includes("no more translations") ||
     t.includes("undefined") ||
-    t.includes("[[") ||
-    t.includes("translated.net") ||
-    t.includes("mymemory") ||
-    t.includes("warning:") ||
-    t.includes("error:")
+    t.includes("[[")
   );
 }
-
 
 async function translateWithGoogle(text, from, to) {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
@@ -439,19 +431,13 @@ async function translateAndSend(text){
   const to = targetLang;
 
   const cacheKey = `${from}|${to}|${text}`;
-
   if (_translateCache.has(cacheKey)) {
     const cached = _translateCache.get(cacheKey);
-
-    if (!isBadTranslation(cached)) {
-      lastTranslated = cached;
-      speakerTranslated.className = "text gold";
-      speakerTranslated.textContent = cached;
-      sendLive({ original:text, translated:cached, fromLang:from, toLang:to, partial:false, status:"translated" });
-      return;
-    } else {
-      _translateCache.delete(cacheKey);
-    }
+    lastTranslated = cached;
+    speakerTranslated.className = "text gold";
+    speakerTranslated.textContent = cached;
+    sendLive({ original:text, translated:cached, fromLang:from, toLang:to, partial:false, status:"translated" });
+    return;
   }
 
   speakerTranslated.className = "text gold";
@@ -459,8 +445,8 @@ async function translateAndSend(text){
 
   let translated = "";
 
-  // SOLO GOOGLE TRANSLATE.
-  // El proxy de Netlify, DeepL y MyMemory quedan totalmente fuera de esta app.
+  // ÚNICO traductor activo: Google Translate.
+  // No llama a Netlify Functions, DeepL ni MyMemory.
   try {
     translated = await translateWithGoogle(text, from, to);
   } catch(e) {
@@ -486,12 +472,12 @@ async function translateAndSend(text){
       status:"translated"
     });
   } else {
-    // Nunca mostrar errores ni warnings a los oyentes.
+    // Nunca mostrar errores ni repetir original como traducción.
     lastSentText = "";
     lastTranslated = "";
 
     speakerTranslated.className = "text gold ph";
-    speakerTranslated.textContent = "No se obtuvo traducción. Intenta otra vez.";
+    speakerTranslated.textContent = "Sin traducción disponible.";
 
     sendLive({
       original:text,
@@ -505,7 +491,8 @@ async function translateAndSend(text){
 }
 
 function sendLive(payload){
-  // Protección final: aunque algo viejo mande un warning, jamás se guarda en Firebase.
+  // Último filtro antes de escribir en Firebase.
+  // Si algo raro llega aquí, NO se mostrará a los oyentes.
   if (payload.translated && isBadTranslation(payload.translated)) {
     payload.translated = "";
   }
