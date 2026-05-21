@@ -409,21 +409,14 @@ function isBadTranslation(text) {
     t.includes("you used all available") ||
     t.includes("no more translations") ||
     t.includes("undefined") ||
-    t.includes("[[")
+    t.includes("[[") ||
+    t.includes("translated.net") ||
+    t.includes("mymemory") ||
+    t.includes("warning:") ||
+    t.includes("error:")
   );
 }
 
-async function translateWithProxy(text, from, to) {
-  const res = await fetch("/.netlify/functions/translate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, from, to })
-  });
-  if (!res.ok) throw new Error("Proxy error " + res.status);
-  const data = await res.json();
-  if (!data.translated || isBadTranslation(data.translated)) throw new Error("Proxy sin traducción válida");
-  return data.translated;
-}
 
 async function translateWithGoogle(text, from, to) {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
@@ -441,18 +434,24 @@ const _translateCache = new Map();
 async function translateAndSend(text){
   if(!text || text === lastSentText) return;
   lastSentText = text;
+
   const from = speakerLang.startsWith("es") ? "es" : "en";
   const to = targetLang;
 
-  // Revisar cache primero
   const cacheKey = `${from}|${to}|${text}`;
+
   if (_translateCache.has(cacheKey)) {
     const cached = _translateCache.get(cacheKey);
-    lastTranslated = cached;
-    speakerTranslated.className = "text gold";
-    speakerTranslated.textContent = cached;
-    sendLive({ original:text, translated:cached, fromLang:from, toLang:to, partial:false, status:"translated" });
-    return;
+
+    if (!isBadTranslation(cached)) {
+      lastTranslated = cached;
+      speakerTranslated.className = "text gold";
+      speakerTranslated.textContent = cached;
+      sendLive({ original:text, translated:cached, fromLang:from, toLang:to, partial:false, status:"translated" });
+      return;
+    } else {
+      _translateCache.delete(cacheKey);
+    }
   }
 
   speakerTranslated.className = "text gold";
@@ -460,38 +459,61 @@ async function translateAndSend(text){
 
   let translated = "";
 
-  // 1. DeepL via Netlify proxy
+  // SOLO GOOGLE TRANSLATE.
+  // El proxy de Netlify, DeepL y MyMemory quedan totalmente fuera de esta app.
   try {
-    translated = await translateWithProxy(text, from, to);
+    translated = await translateWithGoogle(text, from, to);
   } catch(e) {
-    console.warn("DeepL falló:", e.message);
+    console.warn("Google falló:", e.message);
+    translated = "";
   }
 
-  // 2. Google Translate (sin API key, sin límite)
-  if (!translated) {
-    try {
-      translated = await translateWithGoogle(text, from, to);
-    } catch(e) {
-      console.warn("Google también falló:", e.message);
-    }
-  }
-
-  if(translated){
+  if(translated && !isBadTranslation(translated)){
     if (_translateCache.size >= 80) _translateCache.delete(_translateCache.keys().next().value);
+
     _translateCache.set(cacheKey, translated);
     lastTranslated = translated;
+
     speakerTranslated.className = "text gold";
     speakerTranslated.textContent = translated;
-    sendLive({ original:text, translated, fromLang:from, toLang:to, partial:false, status:"translated" });
+
+    sendLive({
+      original:text,
+      translated:translated,
+      fromLang:from,
+      toLang:to,
+      partial:false,
+      status:"translated"
+    });
   } else {
-    // Nunca mostrar errores al oyente
+    // Nunca mostrar errores ni warnings a los oyentes.
     lastSentText = "";
-    speakerTranslated.textContent = "⚠️ Sin traducción — verificar conexión";
-    sendLive({ original:text, translated:text, fromLang:from, toLang:to, partial:false, status:"original" });
+    lastTranslated = "";
+
+    speakerTranslated.className = "text gold ph";
+    speakerTranslated.textContent = "No se obtuvo traducción. Intenta otra vez.";
+
+    sendLive({
+      original:text,
+      translated:"",
+      fromLang:from,
+      toLang:to,
+      partial:false,
+      status:"error"
+    });
   }
 }
 
 function sendLive(payload){
+  // Protección final: aunque algo viejo mande un warning, jamás se guarda en Firebase.
+  if (payload.translated && isBadTranslation(payload.translated)) {
+    payload.translated = "";
+  }
+
+  if (payload.original && isBadTranslation(payload.original)) {
+    payload.original = "";
+  }
+
   liveRef.set({
     ...payload,
     ts: Date.now()
