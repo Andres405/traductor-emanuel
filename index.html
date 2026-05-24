@@ -113,7 +113,6 @@ body:before{
 .send-btn{border:0;border-radius:16px;background:linear-gradient(135deg,var(--gold),var(--gold2));color:#07101f;font-weight:900;padding:0 16px;cursor:pointer}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.9);padding:12px 20px;border-radius:999px;font-size:13px;font-weight:900;z-index:9999;opacity:0;transition:.25s}
 .toast.show{opacity:1}
-
 .auto-audio-off{background:rgba(255,255,255,.10)!important;color:rgba(255,255,255,.75)!important;border:1px solid rgba(255,255,255,.18)!important}
 .auto-audio-on{background:linear-gradient(135deg,#22c55e,#86efac)!important;color:#07101f!important}
 @media(max-width:700px){
@@ -246,6 +245,41 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const liveRef = db.ref("traductor_emanuel_live_v2");
 
+// ====================== FILTRO DE VOCABULARIO INAPROPIADO ======================
+// Palabras que el reconocimiento de voz puede confundir con sonidos similares
+// o regionalismos que no corresponden al vocabulario de la iglesia.
+// Si alguna aparece en el texto reconocido, el fragmento se descarta silenciosamente.
+const BLOCKED_WORDS = [
+  // Español — malas palabras y regionalismos inapropiados
+  "güey","guey","wey","cabron","cabrón","chingada","chingado","chingar","chinga",
+  "pendejo","pendeja","puta","puto","pinche","mamada","mamadas","culero","culera",
+  "verga","chinga","coño","joder","hostia","mierda","coñazo","hijueputa",
+  "hijoputa","marica","maricón","estupido","estúpido","imbecil","imbécil",
+  "idiota","maldito","maldita","bastardo","bastarda","zorra","perra","perro",
+  // Inglés — palabras que el motor de voz puede generar por error
+  "damn","dammit","shit","crap","hell","ass","bastard","bitch","fuck","fucking",
+  "bullshit","cunt","dick","pussy","asshole","jackass","motherfucker","screw you",
+  "son of a bitch","holy shit","goddamn","freaking","freakin","wtf"
+];
+
+/**
+ * Devuelve true si el texto contiene alguna palabra bloqueada.
+ * Usa límites de palabra para no bloquear "pastor" por contener letras de otra palabra, etc.
+ */
+function containsBlockedWord(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase()
+    // Quitar acentos para comparar "güey" == "guey", etc.
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  for (const word of BLOCKED_WORDS) {
+    const normalized = word.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    // Buscar como palabra completa (con límites simples)
+    const pattern = new RegExp("(^|[\\s,.:;!?¿¡\"'()])(" + normalized.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + ")($|[\\s,.:;!?¿¡\"'()])", "i");
+    if (pattern.test(" " + lower + " ")) return true;
+  }
+  return false;
+}
+
 // ====================== STATE ======================
 let speakerLang = "es-ES";
 let targetLang = "en";
@@ -260,7 +294,10 @@ let lastSpeak = "";
 let autoAudio = false;
 let lastAutoSpoken = "";
 
-// Acumulador de contexto para mejor traducción
+// Último texto válido mostrado al oyente (para mantenerlo durante pausas)
+let lastValidListenerText = "";
+let lastValidOriginal = "";
+
 let contextBuffer = "";
 let finalBuffer = "";
 
@@ -271,7 +308,6 @@ function showScreen(name){
 }
 function goRole(){
   stopRecognition();
-  // Limpiar Firebase al salir para que oyentes vean pantalla limpia
   liveRef.set({
     original: "",
     translated: "",
@@ -313,18 +349,21 @@ function startRecognition(){
     speakerDot.classList.add("live");
     speakerStatus.textContent = "🔴 Escuchando en vivo. Habla claro y cerca del micrófono.";
 
-    // Limpiar Firebase y buffers para que los oyentes vean pantalla limpia
     lastSentText = "";
     lastTranslated = "";
     contextBuffer = "";
     finalBuffer = "";
+
+    // Al iniciar, enviamos status "listening" en lugar de "starting"
+    // para que los oyentes NO vean "Speaker is starting" sino
+    // que mantengan el último texto válido en pantalla.
     liveRef.set({
       original: "",
       translated: "",
       fromLang: speakerLang.startsWith("es") ? "es" : "en",
       toLang: targetLang,
       partial: false,
-      status: "starting",
+      status: "listening",
       ts: Date.now()
     });
   };
@@ -342,10 +381,23 @@ function startRecognition(){
     const visibleText = (final || interim).trim();
     if(!visibleText) return;
 
+    // ── FILTRO DE VOCABULARIO ──────────────────────────────────────────────
+    // Si el texto reconocido contiene una palabra inapropiada,
+    // se descarta completamente: no se muestra, no se traduce, no se envía.
+    if(containsBlockedWord(visibleText)){
+      console.warn("[Filtro] Texto bloqueado:", visibleText);
+      // Mostrar al operador que hubo un texto filtrado, sin revelar la palabra
+      speakerStatus.textContent = "⚠️ Fragmento filtrado (vocabulario). Continúa hablando.";
+      setTimeout(()=>{
+        if(isRecording) speakerStatus.textContent = "🔴 Escuchando en vivo. Habla claro y cerca del micrófono.";
+      }, 2500);
+      return; // Salir sin enviar nada
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     speakerOriginal.className = "text";
     speakerOriginal.textContent = visibleText;
 
-    // Enviar original inmediatamente para subtítulos en vivo
     sendLive({
       original: visibleText,
       translated: lastTranslated || "",
@@ -357,12 +409,8 @@ function startRecognition(){
 
     if(final.trim()){
       const phrase = final.trim();
-
-      // Traducir SOLO la frase nueva, no todo el historial.
-      // Esto evita que Google repita varias veces lo que ya se había traducido.
       scheduleTranslation(phrase, 0);
     }
-    // Interim: NO se traducen, solo se muestran como subtítulo
   };
 
   recognition.onerror = (e)=>{
@@ -394,7 +442,6 @@ function scheduleTranslation(text, delay){
   translateTimer = setTimeout(()=>translateAndSend(text), delay);
 }
 
-// Detectar respuestas malas antes de mostrarlas
 function isBadTranslation(text) {
   if (!text) return true;
   const t = text.toLowerCase();
@@ -420,7 +467,6 @@ async function translateWithGoogle(text, from, to) {
   return translated;
 }
 
-// Cache para no re-traducir frases repetidas
 const _translateCache = new Map();
 
 async function translateAndSend(text){
@@ -445,8 +491,6 @@ async function translateAndSend(text){
 
   let translated = "";
 
-  // ÚNICO traductor activo: Google Translate.
-  // No llama a Netlify Functions, DeepL ni MyMemory.
   try {
     translated = await translateWithGoogle(text, from, to);
   } catch(e) {
@@ -472,13 +516,10 @@ async function translateAndSend(text){
       status:"translated"
     });
   } else {
-    // Nunca mostrar errores ni repetir original como traducción.
     lastSentText = "";
     lastTranslated = "";
-
     speakerTranslated.className = "text gold ph";
     speakerTranslated.textContent = "Sin traducción disponible.";
-
     sendLive({
       original:text,
       translated:"",
@@ -491,16 +532,12 @@ async function translateAndSend(text){
 }
 
 function sendLive(payload){
-  // Último filtro antes de escribir en Firebase.
-  // Si algo raro llega aquí, NO se mostrará a los oyentes.
   if (payload.translated && isBadTranslation(payload.translated)) {
     payload.translated = "";
   }
-
   if (payload.original && isBadTranslation(payload.original)) {
     payload.original = "";
   }
-
   liveRef.set({
     ...payload,
     ts: Date.now()
@@ -535,8 +572,6 @@ function startListener(){
     listenerDot.classList.add("live");
     listenerStatus.textContent = listenerLang === "es" ? "🔴 En vivo" : "🔴 Live";
 
-    listenerOriginal.textContent = data.original || "–";
-
     // Pastor salió — limpiar pantalla del oyente
     if(data.status === "offline"){
       listenerTranslated.style.opacity = "0.3";
@@ -547,22 +582,44 @@ function startListener(){
       return;
     }
 
-    // Pastor iniciando
-    if(data.status === "starting"){
-      listenerTranslated.style.opacity = "1";
-      listenerTranslated.textContent = listenerLang === "es" ? "El pastor está comenzando..." : "Speaker is starting...";
+    // ── PAUSA / INICIO: mantener el último texto válido visible ────────────
+    // En lugar de mostrar "Speaker is starting..." o limpiar la pantalla,
+    // el oyente simplemente sigue viendo el último fragmento traducido.
+    if(data.status === "starting" || data.status === "listening"){
+      // Solo actualizamos el indicador de estado, NO tocamos el texto principal
       listenerDot.classList.add("live");
-      listenerStatus.textContent = listenerLang === "es" ? "🔴 En vivo" : "🔴 Live";
+      if(data.status === "listening"){
+        listenerStatus.textContent = listenerLang === "es" ? "🔴 Escuchando..." : "🔴 Listening...";
+      }
+      // Si hay texto previo válido, lo mantenemos. Si no hay nada todavía,
+      // mostramos un mensaje neutral sin mencionar "speaker is starting".
+      if(!lastValidListenerText){
+        listenerTranslated.style.opacity = "0.5";
+        listenerTranslated.textContent = listenerLang === "es"
+          ? "En vivo — esperando audio..."
+          : "Live — waiting for audio...";
+      }
+      // Si ya hay texto anterior, no se toca → sigue visible
+      listenerOriginal.textContent = lastValidOriginal || "–";
       return;
     }
+    // ──────────────────────────────────────────────────────────────────────
+
+    listenerOriginal.textContent = data.original || "–";
 
     let textToShow = "";
     if(listenerLang === data.fromLang){
       textToShow = data.original || "";
-    }else if(listenerLang === data.toLang){
+    } else if(listenerLang === data.toLang){
       textToShow = data.translated || data.original || "";
-    }else{
+    } else {
       textToShow = data.translated || data.original || "";
+    }
+
+    // Guardar el último texto válido para usarlo durante pausas
+    if(textToShow){
+      lastValidListenerText = textToShow;
+      lastValidOriginal = data.original || "";
     }
 
     listenerTranslated.style.opacity = "0.6";
@@ -613,14 +670,13 @@ function toggleAutoAudio(){
     if(text && text !== "La traducción aparecerá aquí." && text !== "Waiting for translation..."){
       lastAutoSpoken = text;
       speakText(text);
-    }else{
-      // Unlock speech engine with a very short phrase after user tap.
+    } else {
       const unlock = new SpeechSynthesisUtterance(listenerLang === "es" ? "Audio activado" : "Audio enabled");
       unlock.lang = listenerLang === "es" ? "es-ES" : "en-US";
       unlock.volume = .8;
       window.speechSynthesis.speak(unlock);
     }
-  }else{
+  } else {
     window.speechSynthesis.cancel();
   }
 }
