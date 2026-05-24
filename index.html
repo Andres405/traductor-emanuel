@@ -414,13 +414,35 @@ function startRecognition(){
   };
 
   recognition.onerror = (e)=>{
-    if(e.error === "not-allowed") toast("Permiso de micrófono denegado.");
-    else if(e.error !== "no-speech") toast("Error de micrófono: " + e.error);
+    if(e.error === "not-allowed"){
+      toast("Permiso de micrófono denegado.");
+      isRecording = false; // No reintentar si no hay permiso
+    } else if(e.error === "network"){
+      // Error de red: silencioso para no alarmar. Se reintenta automáticamente en onend.
+      speakerStatus.textContent = "⚠️ Reconectando micrófono...";
+    } else if(e.error === "audio-capture"){
+      toast("No se detecta micrófono en el dispositivo.");
+      isRecording = false;
+    } else if(e.error !== "no-speech" && e.error !== "aborted"){
+      // "aborted" y "no-speech" son normales; los demás sí se notifican
+      toast("Error de micrófono: " + e.error);
+    }
   };
 
   recognition.onend = ()=>{
     if(isRecording){
-      try { recognition.start(); } catch(e){}
+      // Espera breve antes de reiniciar para evitar bucle inmediato en errores de red
+      setTimeout(()=>{
+        if(isRecording){
+          try {
+            recognition.start();
+            speakerStatus.textContent = "🔴 Escuchando en vivo. Habla claro y cerca del micrófono.";
+          } catch(e){
+            // Si falla el reinicio, crear una instancia nueva
+            setTimeout(()=>{ if(isRecording) startRecognition(); }, 1000);
+          }
+        }
+      }, 400);
     }
   };
 
