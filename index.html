@@ -123,10 +123,86 @@ body:before{
   .manual-area{flex-direction:column}
   .send-btn{padding:14px}
 }
+
+/* ── Modal PIN ─────────────────────────────────────────────────────────── */
+.pin-overlay{
+  display:none;position:fixed;inset:0;z-index:8000;
+  background:rgba(0,0,0,.82);backdrop-filter:blur(6px);
+  align-items:center;justify-content:center;
+}
+.pin-overlay.show{display:flex}
+.pin-card{
+  background:linear-gradient(145deg,#0d1f3c,#07101f);
+  border:1px solid rgba(212,175,55,.35);
+  border-radius:28px;padding:32px 28px;width:100%;max-width:340px;text-align:center;
+  box-shadow:0 24px 60px rgba(0,0,0,.6);
+}
+.pin-title{font-family:Cinzel,serif;color:var(--gold);font-size:20px;margin-bottom:6px}
+.pin-sub{font-size:13px;color:rgba(255,255,255,.55);margin-bottom:22px}
+.pin-dots{display:flex;justify-content:center;gap:10px;margin-bottom:22px}
+.pin-dot{
+  width:16px;height:16px;border-radius:50%;
+  border:2px solid rgba(212,175,55,.45);background:transparent;transition:.15s;
+}
+.pin-dot.filled{background:var(--gold);border-color:var(--gold)}
+.pin-dot.error{background:var(--red);border-color:var(--red)}
+.pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.pin-key{
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);
+  color:white;border-radius:16px;padding:18px 10px;font-size:22px;font-weight:900;
+  cursor:pointer;font-family:Nunito,sans-serif;transition:.12s;
+}
+.pin-key:active{transform:scale(.93);background:rgba(212,175,55,.22)}
+.pin-del{
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);
+  color:rgba(255,255,255,.65);border-radius:16px;padding:18px 10px;font-size:18px;
+  cursor:pointer;transition:.12s;
+}
+.pin-del:active{transform:scale(.93)}
+.pin-cancel{
+  width:100%;border:0;border-radius:14px;padding:13px;
+  background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);
+  font-family:Nunito,sans-serif;font-size:14px;font-weight:900;cursor:pointer;
+}
+.pin-shake{animation:shake .35s ease}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
 </style>
 </head>
 <body>
 <div class="toast" id="toast"></div>
+
+<!-- ── Modal PIN Modo Pastor ──────────────────────────────────────────── -->
+<div class="pin-overlay" id="pinOverlay">
+  <div class="pin-card" id="pinCard">
+    <div class="pin-title">🔒 Modo Pastor</div>
+    <div class="pin-sub">Ingresa el PIN para continuar</div>
+    <div class="pin-dots" id="pinDots">
+      <div class="pin-dot" id="pd0"></div>
+      <div class="pin-dot" id="pd1"></div>
+      <div class="pin-dot" id="pd2"></div>
+      <div class="pin-dot" id="pd3"></div>
+      <div class="pin-dot" id="pd4"></div>
+      <div class="pin-dot" id="pd5"></div>
+      <div class="pin-dot" id="pd6"></div>
+    </div>
+    <div class="pin-pad">
+      <button class="pin-key" onclick="pinKey('1')">1</button>
+      <button class="pin-key" onclick="pinKey('2')">2</button>
+      <button class="pin-key" onclick="pinKey('3')">3</button>
+      <button class="pin-key" onclick="pinKey('4')">4</button>
+      <button class="pin-key" onclick="pinKey('5')">5</button>
+      <button class="pin-key" onclick="pinKey('6')">6</button>
+      <button class="pin-key" onclick="pinKey('7')">7</button>
+      <button class="pin-key" onclick="pinKey('8')">8</button>
+      <button class="pin-key" onclick="pinKey('9')">9</button>
+      <div></div>
+      <button class="pin-key" onclick="pinKey('0')">0</button>
+      <button class="pin-del" onclick="pinDel()">⌫</button>
+    </div>
+    <button class="pin-cancel" onclick="pinCancel()">Cancelar</button>
+  </div>
+</div>
+
 
 <section id="screen-role" class="screen active">
   <div class="header">
@@ -319,7 +395,12 @@ function goRole(){
   finalBuffer = "";
   showScreen("role");
 }
-function goSpeaker(){ showScreen("speaker"); }
+function goSpeaker(){
+  // Mostrar modal PIN antes de entrar al modo pastor
+  pinInput = "";
+  updatePinDots();
+  document.getElementById("pinOverlay").classList.add("show");
+}
 function goListener(){ showScreen("listener"); startListener(); }
 
 // ====================== SPEAKER ======================
@@ -732,6 +813,53 @@ function toast(msg){
   setTimeout(()=>t.classList.remove("show"),3000);
 }
 
+// ====================== PIN MODO PASTOR ======================
+const SPEAKER_PIN = "6349985";
+let pinInput = "";
+
+function pinKey(digit){
+  if(pinInput.length >= 7) return;
+  pinInput += digit;
+  updatePinDots();
+  if(pinInput.length === 7) setTimeout(checkPin, 120);
+}
+
+function pinDel(){
+  if(!pinInput.length) return;
+  pinInput = pinInput.slice(0, -1);
+  updatePinDots();
+}
+
+function updatePinDots(){
+  for(let i = 0; i < 7; i++){
+    const dot = document.getElementById("pd" + i);
+    dot.classList.toggle("filled", i < pinInput.length);
+    dot.classList.remove("error");
+  }
+}
+
+function checkPin(){
+  if(pinInput === SPEAKER_PIN){
+    document.getElementById("pinOverlay").classList.remove("show");
+    pinInput = "";
+    showScreen("speaker");
+  } else {
+    // PIN incorrecto — sacudir y limpiar
+    for(let i = 0; i < 7; i++) document.getElementById("pd" + i).classList.add("error");
+    document.getElementById("pinCard").classList.add("pin-shake");
+    setTimeout(()=>{
+      document.getElementById("pinCard").classList.remove("pin-shake");
+      pinInput = "";
+      updatePinDots();
+    }, 400);
+  }
+}
+
+function pinCancel(){
+  document.getElementById("pinOverlay").classList.remove("show");
+  pinInput = "";
+}
+
 window.goRole=goRole;
 window.goSpeaker=goSpeaker;
 window.goListener=goListener;
@@ -741,6 +869,9 @@ window.toggleMic=toggleMic;
 window.manualSend=manualSend;
 window.speakNow=speakNow;
 window.toggleAutoAudio=toggleAutoAudio;
+window.pinKey=pinKey;
+window.pinDel=pinDel;
+window.pinCancel=pinCancel;
 </script>
 </body>
 </html>
