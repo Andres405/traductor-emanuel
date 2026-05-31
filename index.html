@@ -224,7 +224,7 @@ body:before{
           <div><h3>Modo Oyente / Listener</h3><p>Las personas abren este modo y reciben la traducción casi en vivo.</p></div>
         </div>
       </div>
-      <div class="notice">Mejora principal: muestra subtítulos reconocidos casi al instante y actualiza la traducción en bloques cortos. Para mejor resultado, usa Chrome y buena conexión Wi‑Fi.</div>
+
     </div>
   </div>
 </section>
@@ -373,6 +373,9 @@ let lastAutoSpoken = "";
 // Último texto válido mostrado al oyente (para mantenerlo durante pausas)
 let lastValidListenerText = "";
 let lastValidOriginal = "";
+// Timer para tiempo mínimo de lectura
+let readingTimer = null;
+let readingLocked = false;
 
 let contextBuffer = "";
 let finalBuffer = "";
@@ -585,6 +588,86 @@ async function translateWithGoogle(text, from, to) {
   return translated;
 }
 
+
+// ── Diccionario de modismos español → equivalente natural en inglés ───────
+// Se aplica ANTES de traducir para que DeepL reciba una frase más clara.
+const IDIOMS_ES = [
+  // Modismos y frases hechas
+  ["taparle el ojo al macho",       "pull the wool over someone's eyes"],
+  ["tapar el ojo al macho",         "pull the wool over someone's eyes"],
+  ["echar agua al mar",             "beat a dead horse"],
+  ["no hay mal que por bien no venga", "every cloud has a silver lining"],
+  ["al mal tiempo buena cara",      "make the best of a bad situation"],
+  ["a otro perro con ese hueso",    "tell it to someone who will believe it"],
+  ["no hay rosa sin espinas",       "every rose has its thorn"],
+  ["camarón que se duerme se lo lleva la corriente", "you snooze you lose"],
+  ["más vale tarde que nunca",      "better late than never"],
+  ["en boca cerrada no entran moscas", "silence is golden"],
+  ["el que mucho abarca poco aprieta", "don't bite off more than you can chew"],
+  ["a palabras necias oídos sordos", "turn a deaf ear to foolish words"],
+  ["no dejes para mañana lo que puedas hacer hoy", "don't put off until tomorrow what you can do today"],
+  ["agua pasada no mueve molino",   "let bygones be bygones"],
+  ["barriga llena corazón contento","a full stomach makes a happy heart"],
+  ["del dicho al hecho hay mucho trecho", "easier said than done"],
+  ["dios mediante",                 "God willing"],
+  ["si dios quiere",                "God willing"],
+  ["con la ayuda de dios",          "with God's help"],
+  ["gloria a dios",                 "glory to God"],
+  ["a dios gracias",                "thanks be to God"],
+  ["gracias a dios",                "thanks be to God"],
+  // Palabras coloquiales mexicanas — se reemplazan por equivalente neutral
+  ["gacho",    "bad"],
+  ["gachísimo","really bad"],
+  ["chido",    "great"],
+  ["chida",    "great"],
+  ["chingón",  "impressive"],  // si llega a escapar el filtro
+  ["padrísimo","awesome"],
+  ["padre",    "great"],       // cuando se usa como adjetivo coloquial
+  ["cuate",    "friend"],
+  ["cuates",   "friends"],
+  ["güero",    "fair-skinned person"],
+  ["moreno",   "dark-skinned person"],
+  ["chamaco",  "kid"],
+  ["chamacos", "kids"],
+  ["chavo",    "young man"],
+  ["chava",    "young woman"],
+  ["ahorita",  "right now"],
+  ["órale",    "alright"],
+  ["ándale",   "come on"],
+  ["híjole",   "wow"],
+  ["fíjate",   "listen"],
+  ["¿qué onda?","what's up?"],
+  ["neta",     "truth"],
+  ["de a deveras","for real"],
+];
+
+/**
+ * Reemplaza modismos en el texto antes de traducir.
+ * Solo reemplaza coincidencias exactas de frase completa (case-insensitive).
+ */
+function applyIdioms(text) {
+  let result = text;
+  for (const [esp, eng] of IDIOMS_ES) {
+    const pattern = new RegExp(esp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    result = result.replace(pattern, eng);
+  }
+  return result;
+}
+
+/**
+ * Corrige "god" → "God" cuando se refiere al Dios cristiano.
+ * No afecta palabras como "godfather", "demigod", etc.
+ */
+function fixGodCapitalization(text) {
+  if (!text) return text;
+  // Reemplazar " god " y variantes al inicio/fin/puntuación → " God "
+  return text
+    .replace(/\bgod\b(?!'s|father|mother|send|like|ly)/gi, (match, offset, str) => {
+      // Verificar que no sea parte de una palabra compuesta
+      return "God";
+    });
+}
+
 const _translateCache = new Map();
 
 async function translateAndSend(text){
@@ -609,18 +692,24 @@ async function translateAndSend(text){
 
   let translated = "";
 
+  // Aplicar diccionario de modismos antes de traducir
+  const textToTranslate = applyIdioms(text);
+
   // Intentar DeepL primero; si falla, usar Google como respaldo
   try {
-    translated = await translateWithDeepL(text, from, to);
+    translated = await translateWithDeepL(textToTranslate, from, to);
   } catch(e) {
     console.warn("DeepL falló, usando Google como respaldo:", e.message);
     try {
-      translated = await translateWithGoogle(text, from, to);
+      translated = await translateWithGoogle(textToTranslate, from, to);
     } catch(e2) {
       console.warn("Google también falló:", e2.message);
       translated = "";
     }
   }
+
+  // Corregir capitalización de "God"
+  if (translated) translated = fixGodCapitalization(translated);
 
   if(translated && !isBadTranslation(translated)){
     if (_translateCache.size >= 80) _translateCache.delete(_translateCache.keys().next().value);
@@ -746,20 +835,45 @@ function startListener(){
       lastValidOriginal = data.original || "";
     }
 
-    listenerTranslated.style.opacity = "0.6";
-    setTimeout(()=>{ listenerTranslated.style.opacity = "1"; }, 120);
-    listenerTranslated.textContent = textToShow || (listenerLang === "es" ? "Esperando traducción..." : "Waiting for translation...");
-    listenerMeta.textContent = data.partial
-      ? (listenerLang === "es" ? "Escuchando frase parcial..." : "Listening to partial phrase...")
-      : (listenerLang === "es" ? "Última actualización: ahora" : "Last update: now");
+    // ── Tiempo mínimo de lectura proporcional ─────────────────────────────
+    // Si hay un texto anterior todavía en pantalla y no ha pasado suficiente
+    // tiempo para leerlo, esperar antes de reemplazarlo.
+    // Fórmula: ~1 segundo por cada 8 palabras, mínimo 5s, máximo 12s.
+    function showTranslation() {
+      listenerTranslated.style.opacity = "0.6";
+      setTimeout(()=>{ listenerTranslated.style.opacity = "1"; }, 120);
+      listenerTranslated.textContent = textToShow || (listenerLang === "es" ? "Esperando traducción..." : "Waiting for translation...");
+      listenerMeta.textContent = data.partial
+        ? (listenerLang === "es" ? "Escuchando frase parcial..." : "Listening to partial phrase...")
+        : (listenerLang === "es" ? "Última actualización: ahora" : "Last update: now");
+      lastTranslated = textToShow;
+      ttsBtn.disabled = !textToShow;
+      readingLocked = false;
 
-    lastTranslated = textToShow;
-    ttsBtn.disabled = !textToShow;
-
-    if(autoAudio && textToShow && textToShow !== lastAutoSpoken && !data.partial){
-      lastAutoSpoken = textToShow;
-      speakText(textToShow);
+      if(autoAudio && textToShow && textToShow !== lastAutoSpoken && !data.partial){
+        lastAutoSpoken = textToShow;
+        speakText(textToShow);
+      }
     }
+
+    if(!data.partial && textToShow && readingLocked){
+      // Hay texto en pantalla que todavía se está leyendo — esperar
+      if(readingTimer) clearTimeout(readingTimer);
+      const wordCount = (listenerTranslated.textContent || "").split(/\s+/).length;
+      const waitMs = Math.min(Math.max(wordCount * 1000, 5000), 12000);
+      readingTimer = setTimeout(showTranslation, waitMs);
+    } else {
+      // Sin restricción — mostrar inmediatamente y activar el lock
+      if(readingTimer) clearTimeout(readingTimer);
+      if(!data.partial && textToShow){
+        readingLocked = true;
+        const wordCount = textToShow.split(/\s+/).length;
+        const lockMs = Math.min(Math.max(wordCount * 1000, 5000), 12000);
+        readingTimer = setTimeout(()=>{ readingLocked = false; }, lockMs);
+      }
+      showTranslation();
+    }
+    // ──────────────────────────────────────────────────────────────────────
   });
 }
 
