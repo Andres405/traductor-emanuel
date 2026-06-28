@@ -639,14 +639,48 @@ const IDIOMS_ES = [
   ["¿qué onda?","what's up?"],
   ["neta",     "truth"],
   ["de a deveras","for real"],
+  // Saludo congregacional
+  ["hermanos y hermanas", "brothers and sisters"],
+  ["hermanos",  "brothers and sisters"],
+  ["hermanas",  "sisters"],
+  // Estados de ánimo / expresiones coloquiales
+  ["agüitado",   "feeling down"],
+  ["agüitada",   "feeling down"],
+  ["aguitado",   "feeling down"],
+  ["aguitada",   "feeling down"],
+  ["achicopalado", "feeling discouraged"],
+  ["achicopalada", "feeling discouraged"],
+  ["la regué",   "I messed up"],
+  ["la regamos", "we messed up"],
+  // En vano / sin sentido
+  ["de oquis",   "for no reason"],
+  ["de okis",    "for no reason"],
+  ["de a oquis", "for no reason"],
+  // Cantidades coloquiales
+  ["un chorro de", "a ton of"],
+  ["un montón de", "a ton of"],
 ];
 
 /**
  * Reemplaza modismos en el texto antes de traducir.
  * Solo reemplaza coincidencias exactas de frase completa (case-insensitive).
  */
-function applyIdioms(text) {
+// Correcciones de pronunciación / reconocimiento antes de aplicar modismos.
+// El micrófono a veces capta "entos" cuando el pastor dice "entonces".
+const PRONUNCIATION_FIXES = [
+  [/\bentos\b/gi, "entonces"],
+];
+
+function applyPronunciationFixes(text) {
   let result = text;
+  for (const [pattern, replacement] of PRONUNCIATION_FIXES) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+function applyIdioms(text) {
+  let result = applyPronunciationFixes(text);
   for (const [esp, eng] of IDIOMS_ES) {
     const pattern = new RegExp(esp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
     result = result.replace(pattern, eng);
