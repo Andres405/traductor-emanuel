@@ -763,6 +763,9 @@ const IDIOMS_ES = [
   ["agarren la onda", "understand the situation"],
   ["agarra la onda",  "get the point"],
   ["agarró la onda",  "got the point"],
+  ["agarre la onda hermanos", "brothers and sisters, understand the situation"],
+  ["agarren la onda hermanos", "brothers and sisters, understand the situation"],
+  ["onda hermanos",   "brothers and sisters, get the point"],
   // Plantas / vegetación — NUNCA cannabis
   ["la yerba",    "the plant"],
   ["una yerba",   "a plant"],
@@ -837,12 +840,12 @@ function applyIdioms(text) {
  */
 function fixGodCapitalization(text) {
   if (!text) return text;
-  // Reemplazar " god " y variantes al inicio/fin/puntuación → " God "
   return text
-    .replace(/\bgod\b(?!'s|father|mother|send|like|ly)/gi, (match, offset, str) => {
-      // Verificar que no sea parte de una palabra compuesta
-      return "God";
-    });
+    .replace(/\bgod\b(?!'s|father|mother|send|like|ly)/gi, () => "God")
+    // Residuos de modismos cortados por el micrófono (post-traducción)
+    .replace(/\bgrab the\s*$/gi, "")
+    .replace(/\bget the\s*$/gi, "")
+    .trim();
 }
 
 const _translateCache = new Map();
