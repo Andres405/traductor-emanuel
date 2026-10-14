@@ -842,10 +842,20 @@ function fixGodCapitalization(text) {
   if (!text) return text;
   return text
     .replace(/\bgod\b(?!'s|father|mother|send|like|ly)/gi, () => "God")
-    // Residuos de modismos cortados por el micrófono (post-traducción)
-    .replace(/\bgrab the\s*$/gi, "")
-    .replace(/\bget the\s*$/gi, "")
     .trim();
+}
+
+/**
+ * Detecta si una traducción quedó cortada a la mitad.
+ * Si el texto termina con una preposición o artículo suelto,
+ * significa que el micrófono cortó la frase antes de completarse.
+ * En ese caso se descarta para no mostrar fragmentos sin sentido.
+ */
+function isIncompleteTranslation(text) {
+  if (!text) return true;
+  // Palabras que NUNCA son el final natural de una frase en inglés
+  const danglingWords = /\b(the|a|an|of|to|from|and|in|with|for|at|by|on|or|but|so|as|if|that|this|these|those|its|their|our|your|his|her|grab|get|take|put|be|is|are|was|were|have|has|had|will|would|could|should|can|may|might|do|does|did)\s*[.,]?\s*$/i;
+  return danglingWords.test(text.trim());
 }
 
 const _translateCache = new Map();
@@ -895,6 +905,14 @@ async function translateAndSend(text){
 
   // Corregir capitalización de "God"
   if (translated) translated = fixGodCapitalization(translated);
+
+  // Descartar traducciones que quedaron cortadas a la mitad
+  // (terminan con artículo/preposición suelta → frase incompleta)
+  if (translated && isIncompleteTranslation(translated)) {
+    console.warn("[Filtro] Traducción incompleta descartada:", translated);
+    lastSentText = ""; // permitir reintento cuando llegue la frase completa
+    return;
+  }
 
   if(translated && !isBadTranslation(translated)){
     if (_translateCache.size >= 80) _translateCache.delete(_translateCache.keys().next().value);
