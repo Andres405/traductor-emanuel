@@ -166,6 +166,37 @@ body:before{
 }
 .pin-shake{animation:shake .35s ease}
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+
+/* ── Frase anterior (atenuada) en pantalla del oyente ─── */
+.prev-phrase{
+  font-size:clamp(16px,3.5vw,24px);line-height:1.5;
+  color:rgba(255,255,255,.32);white-space:pre-wrap;
+  margin-bottom:14px;font-style:italic;
+  min-height:28px;transition:opacity .4s;
+}
+
+/* ── Modo Proyector ──────────────────────────────────── */
+#screen-projector{
+  display:none;position:fixed;inset:0;z-index:9999;
+  background:#000;align-items:center;justify-content:center;
+  flex-direction:column;gap:28px;padding:40px;
+}
+#screen-projector.active{display:flex}
+.proj-text{
+  font-size:clamp(48px,9vw,96px);font-weight:900;
+  color:#ffe89a;text-align:center;line-height:1.35;
+  text-shadow:0 0 40px rgba(212,175,55,.45);white-space:pre-wrap;
+  max-width:1400px;
+}
+.proj-prev{
+  font-size:clamp(28px,5vw,54px);font-weight:700;
+  color:rgba(255,255,255,.28);text-align:center;line-height:1.35;
+  white-space:pre-wrap;max-width:1400px;font-style:italic;
+}
+.proj-status{
+  position:fixed;bottom:20px;right:24px;
+  font-size:13px;color:rgba(255,255,255,.3);letter-spacing:1px;
+}
 </style>
 </head>
 <body>
@@ -203,6 +234,13 @@ body:before{
   </div>
 </div>
 
+
+<!-- ── Modo Proyector (solo visible con ?proyector en la URL) ───────────── -->
+<section id="screen-projector">
+  <div class="proj-prev" id="projPrev"></div>
+  <div class="proj-text" id="projText">Esperando transmisión...</div>
+  <div class="proj-status" id="projStatus">PROYECTOR • IBE</div>
+</section>
 
 <section id="screen-role" class="screen active">
   <div class="header">
@@ -286,6 +324,7 @@ body:before{
     <div class="listen-layout">
       <div class="translation-live">
         <div id="translationLabel" class="label gold">English Translation</div>
+        <div id="listenerPrev" class="prev-phrase"></div>
         <div id="listenerTranslated" class="big">La traducción aparecerá aquí.</div>
       </div>
 
@@ -307,6 +346,23 @@ body:before{
 </section>
 
 <script>
+// ====================== MODO PROYECTOR ======================
+// Se activa SOLO si la URL contiene ?proyector (ej: traductor-emanuel.netlify.app/?proyector)
+// Los oyentes normales con el celular NO verán esta pantalla.
+(function checkProyector(){
+  const params = new URLSearchParams(window.location.search);
+  if(!params.has("proyector")) return;
+
+  // Ocultar todo lo normal y mostrar solo la pantalla del proyector
+  document.getElementById("screen-role").style.display = "none";
+  const proj = document.getElementById("screen-projector");
+  proj.classList.add("active");
+
+  // Conectar Firebase para recibir traducciones en tiempo real
+  // (Firebase se conecta más abajo — esperamos a que esté listo)
+  window._isProyectorMode = true;
+})();
+
 // ====================== FIREBASE ======================
 const firebaseConfig = {
   apiKey: "AIzaSyAzkA9GNlxDr2qGor2t1GWVDvLBwoZgF60",
@@ -320,6 +376,42 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const liveRef = db.ref("traductor_emanuel_live_v2");
+
+// ── Iniciar modo proyector una vez Firebase está listo ───────────────────
+if(window._isProyectorMode){
+  let projLastTs = 0;
+  let projPrevText = "";
+  let projCurrentText = "";
+
+  liveRef.on("value", snap=>{
+    const data = snap.val();
+    if(!data || data.ts === projLastTs) return;
+    projLastTs = data.ts;
+
+    const projText = document.getElementById("projText");
+    const projPrev = document.getElementById("projPrev");
+    const projStatus = document.getElementById("projStatus");
+
+    if(data.status === "offline"){
+      projText.textContent = "En espera...";
+      projPrev.textContent = "";
+      projStatus.textContent = "⚪ SIN TRANSMISIÓN • IBE";
+      return;
+    }
+
+    const newText = data.translated || data.original || "";
+    if(!newText || data.partial) return;
+
+    if(newText !== projCurrentText){
+      projPrevText = projCurrentText;
+      projCurrentText = newText;
+
+      projPrev.textContent = projPrevText;
+      projText.textContent = projCurrentText;
+      projStatus.textContent = "🔴 EN VIVO • IBE";
+    }
+  });
+}
 
 // ====================== FILTRO DE VOCABULARIO INAPROPIADO ======================
 // Palabras que el reconocimiento de voz puede confundir con sonidos similares
@@ -659,6 +751,56 @@ const IDIOMS_ES = [
   // Cantidades coloquiales
   ["un chorro de", "a ton of"],
   ["un montón de", "a ton of"],
+  // Orientación / desorientación
+  ["norteado",    "lost / disoriented"],
+  ["norteada",    "lost / disoriented"],
+  ["norteao",     "lost / disoriented"],
+  // Broma / no es en serio
+  ["cotorreo",    "just joking"],
+  ["relajo",      "joke / not serious"],
+  // Comprender la situación
+  ["agarre la onda",  "understand the situation"],
+  ["agarren la onda", "understand the situation"],
+  ["agarra la onda",  "get the point"],
+  ["agarró la onda",  "got the point"],
+  // Plantas / vegetación — NUNCA cannabis
+  ["la yerba",    "the plant"],
+  ["una yerba",   "a plant"],
+  ["la hierba",   "the plant"],
+  ["una hierba",  "a plant"],
+  ["las yerbas",  "the plants"],
+  ["las hierbas", "the plants"],
+  ["yerba mala",  "bad weed"],
+  ["hierbas malas","weeds"],
+  // Más mexicanismos comunes
+  ["a toda madre",   "excellent"],
+  ["de poca",        "amazing"],
+  ["que bárbaro",    "incredible"],
+  ["qué bárbaro",    "incredible"],
+  ["no manches",     "oh my goodness"],
+  ["ánimo",          "keep going"],
+  ["échale ganas",   "give it your all"],
+  ["echarle ganas",  "give it your all"],
+  ["eso es",         "that is right"],
+  ["pa que sepan",   "so you all know"],
+  ["pa que vean",    "so you all can see"],
+  ["a poco",         "really? / no way"],
+  ["simón",          "yes"],
+  ["nel",            "no"],
+  ["neta del planeta","absolute truth"],
+  ["al tiro",        "ready"],
+  ["sale y vale",    "okay, deal"],
+  ["sale",           "okay"],
+  ["está cañón",     "it is really tough"],
+  ["está cañon",     "it is really tough"],
+  ["qué cañón",      "that is really tough"],
+  ["que cañón",      "that is really tough"],
+  ["no hay de otra", "there is no other way"],
+  ["ni hablar",      "there is no question about it"],
+  ["de todas formas","anyway"],
+  ["de todos modos", "anyway"],
+  ["de volada",      "right away"],
+  ["ahorita mismo",  "right now"],
 ];
 
 /**
@@ -666,9 +808,10 @@ const IDIOMS_ES = [
  * Solo reemplaza coincidencias exactas de frase completa (case-insensitive).
  */
 // Correcciones de pronunciación / reconocimiento antes de aplicar modismos.
-// El micrófono a veces capta "entos" cuando el pastor dice "entonces".
+// El micrófono a veces capta palabras fusionadas o mal reconocidas.
 const PRONUNCIATION_FIXES = [
-  [/\bentos\b/gi, "entonces"],
+  [/\bentos\b/gi,    "entonces"],
+  [/\balguotra\b/gi, "alguna otra"],
 ];
 
 function applyPronunciationFixes(text) {
@@ -729,12 +872,22 @@ async function translateAndSend(text){
   // Aplicar diccionario de modismos antes de traducir
   const textToTranslate = applyIdioms(text);
 
-  // Google Translate directo
+  // ── Intento 1: DeepL vía Netlify Function (más preciso) ─────────────────
   try {
-    translated = await translateWithGoogle(textToTranslate, from, to);
+    translated = await translateWithDeepL(textToTranslate, from, to);
   } catch(e) {
-    console.warn("Google falló:", e.message);
+    console.warn("DeepL falló, usando Google:", e.message);
     translated = "";
+  }
+
+  // ── Intento 2: Google Translate como respaldo automático ─────────────────
+  if (!translated || isBadTranslation(translated)) {
+    try {
+      translated = await translateWithGoogle(textToTranslate, from, to);
+    } catch(e) {
+      console.warn("Google falló:", e.message);
+      translated = "";
+    }
   }
 
   // Corregir capitalización de "God"
@@ -869,6 +1022,13 @@ function startListener(){
     // tiempo para leerlo, esperar antes de reemplazarlo.
     // Fórmula: ~1 segundo por cada 8 palabras, mínimo 5s, máximo 12s.
     function showTranslation() {
+      // Mover el texto actual a "frase anterior" (gris/atenuado)
+      const prevEl = document.getElementById("listenerPrev");
+      const currentText = listenerTranslated.textContent.trim();
+      if(currentText && currentText !== "La traducción aparecerá aquí." && currentText !== textToShow){
+        if(prevEl) prevEl.textContent = currentText;
+      }
+
       listenerTranslated.style.opacity = "0.6";
       setTimeout(()=>{ listenerTranslated.style.opacity = "1"; }, 120);
       listenerTranslated.textContent = textToShow || (listenerLang === "es" ? "Esperando traducción..." : "Waiting for translation...");
@@ -1006,6 +1166,7 @@ function pinCancel(){
 window.goRole=goRole;
 window.goSpeaker=goSpeaker;
 window.goListener=goListener;
+window.goProjector=function(){ window.location.href="/?proyector"; };
 window.setSpeakerLang=setSpeakerLang;
 window.setListenerLang=setListenerLang;
 window.toggleMic=toggleMic;
